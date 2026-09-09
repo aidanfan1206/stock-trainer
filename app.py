@@ -101,7 +101,7 @@ st.html(
     // 用函式作用域避免 const 宣告在 rerun 重跑時互相衝突
     (function () {
     const P = parent, W = P.window, D = P.document;
-    P.console.log("[kline-guard] v8 installed");
+    P.console.log("[kline-guard] v9 installed");
     W.__guardInstance = (W.__guardInstance || 0) + 1;
     const myId = W.__guardInstance;
 
@@ -481,6 +481,13 @@ st.html(
           ), 60);
         }
       }).observe(appRoot, { childList: true });
+    }
+
+    // 載入徽章：每次「整頁載入」顯示一次，證明新版已生效
+    // （rerun 重建的新實例不重複顯示，避免蓋掉診斷訊息）
+    if (!W.__loadBadgeShown) {
+      W.__loadBadgeShown = true;
+      setStatus("守護 v9 已啟動（縮放保存就緒）", true);
     }
     })();
     </script>
