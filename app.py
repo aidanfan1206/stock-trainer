@@ -322,6 +322,28 @@ st.html(
       el.on("plotly_relayouting", onRelayout);
       el.on("plotly_relayout", onRelayout);
     };
+    // 自我診斷徽章：寫入結果直接顯示在畫面右上角（雲端除錯用），
+    // 15 秒後自動消失；放在 app 容器外，Streamlit rerun 不會清掉
+    const setStatus = (msg, ok) => {
+      let b = D.getElementById("kline-status");
+      if (!b) {
+        b = D.createElement("div");
+        b.id = "kline-status";
+        b.style.cssText = "position:fixed;top:10px;right:10px;" +
+          "z-index:999999;padding:6px 12px;border-radius:8px;" +
+          "font:12px/1.5 sans-serif;max-width:420px;" +
+          "box-shadow:0 2px 8px rgba(0,0,0,.25);";
+        (D.body || D.documentElement).appendChild(b);
+      }
+      b.textContent = msg;
+      b.style.background = ok ? "#d9f2e6" : "#f8d7da";
+      b.style.color = ok ? "#0b5c37" : "#a13030";
+      b.style.border = "1px solid " + (ok ? "#2fa06b" : "#d9565c");
+      clearTimeout(W.__statusTimer);
+      W.__statusTimer = setTimeout(() => {
+        if (b.parentNode) b.parentNode.removeChild(b);
+      }, 15000);
+    };
     const commitAll = () => {
       const el = D.querySelector(".js-plotly-plot");
       bindEvents(el);  // 圖表可能剛重建：先綁定再取範圍
@@ -331,6 +353,23 @@ st.html(
       if (z && z !== W.__lastZoomWritten) {
         W.__lastZoomWritten = z;
         writeWidget("zoom_state", z);
+        // 自我診斷徽章：寫入結果與失敗原因直接顯示（雲端除錯用）
+        let why = "";
+        try {
+          const zj = JSON.parse(z);
+          if (!spec || spec.dataKey !== zj.k) {
+            why = "資料碼不符：寫入 k=" + zj.k +
+                  " 目前=" + (spec ? spec.dataKey : "無");
+          }
+        } catch (err) { why = "JSON 異常"; }
+        if (!why) {
+          const n = D.querySelectorAll(
+            '[data-testid="stTextInput"] input').length;
+          if (n < 3) why = "隱形輸入框不足：" + n + "/3";
+        }
+        setStatus(why ? "縮放保存 ✗ " + why : "縮放保存 ✓ 已寫入", !why);
+      } else if (!z) {
+        setStatus("縮放保存 ✗ 沒有可寫的縮放（先縮放再點按鈕）", false);
       }
       // 畫線：隨本次互動同批提交（與推進/交易共用同一次 rerun）
       if (el && el._fullLayout &&
