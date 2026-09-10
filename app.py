@@ -376,14 +376,15 @@ st.html(
       el.on("plotly_relayouting", onRelayout);
       el.on("plotly_relayout", onRelayout);
     };
-    // 自我診斷徽章：寫入結果直接顯示在畫面右上角（雲端除錯用），
-    // 15 秒後自動消失；放在 app 容器外，Streamlit rerun 不會清掉
+    // 自我診斷徽章：寫入結果直接顯示（雲端除錯用），2 秒後消失；
+    // 位置往下錯開（top:64px），不擋右上角圖標；放在 app 容器外，
+    // Streamlit rerun 不會清掉
     const setStatus = (msg, ok) => {
       let b = D.getElementById("kline-status");
       if (!b) {
         b = D.createElement("div");
         b.id = "kline-status";
-        b.style.cssText = "position:fixed;top:10px;right:10px;" +
+        b.style.cssText = "position:fixed;top:64px;right:16px;" +
           "z-index:999999;padding:6px 12px;border-radius:8px;" +
           "font:12px/1.5 sans-serif;max-width:420px;" +
           "box-shadow:0 2px 8px rgba(0,0,0,.25);";
@@ -397,7 +398,7 @@ st.html(
       clearTimeout(W.__statusTimer);
       W.__statusTimer = setTimeout(() => {
         if (b.parentNode) b.parentNode.removeChild(b);
-      }, 15000);
+      }, 2000);
     };
     const commitAll = () => {
       const el = D.querySelector(".js-plotly-plot");
