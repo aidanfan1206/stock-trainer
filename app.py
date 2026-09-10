@@ -132,7 +132,7 @@ st.html(
       return (best || parent).document;
     };
     let D = findAppDoc();
-    P.console.log("[kline-guard] v14 installed");
+    P.console.log("[kline-guard] v15 installed");
     W.__guardInstance = (W.__guardInstance || 0) + 1;
     const myId = W.__guardInstance;
 
@@ -560,9 +560,10 @@ st.html(
     // 由輪詢持續重試直到外框出現）
     const addBiliIcon = () => {
       try {
-        // 雲端的工具列（GitHub 圖標／⋮）在「應用文件」裡，登入才
-        // 顯示——外層與應用文件都搜，錨點放寬為 href／title／aria
-        // 含 github 的元素，插到它後面（GitHub 與 ⋮ 之間）
+        // 工具列（GitHub 圖標／⋮）在應用文件的標頭（stHeader），
+        // 標頭按鈕沒有 href／title 屬性（實測確認）——直接錨定
+        // ⋮（stMainMenuButton）本身，把圖標插到它前面
+        // （GitHub 圖標與 ⋮ 之間）
         const docs = [P.document, D];
         let anchor = null, host = null;
         for (const doc of docs) {
@@ -570,19 +571,12 @@ st.html(
             W.__biliDone = true;
             return;
           }
-          for (const el of doc.querySelectorAll("a, button, img")) {
-            const href = (el.getAttribute("href") || "").toLowerCase();
-            const t = ((el.getAttribute("title") || "") + " " +
-                       (el.getAttribute("aria-label") || "")).toLowerCase();
-            if (href.indexOf("github") !== -1 || t.indexOf("github") !== -1) {
-              anchor = el;
-              host = doc;
-              break;
-            }
-          }
-          if (anchor) break;
+          const menu = doc.querySelector(
+            '[data-testid="stMainMenuButton"]') ||
+            doc.querySelector('[data-testid="stMainMenu"]');
+          if (menu) { anchor = menu; host = doc; break; }
         }
-        if (!anchor) return;  // 工具列未出現或未登入：稍後再試
+        if (!anchor) return;  // 標頭未出現：稍後再試
         W.__biliDone = true;
         const b = host.createElement("a");
         b.id = "kline-bili";
@@ -617,8 +611,9 @@ st.html(
              "-1.7 0l-1.8-2.7c-.4-.6.1-1.5.9-1.5z" }));
         b.appendChild(svg);
         b.style.cssText = "display:inline-flex;align-items:center;" +
-          "margin:0 6px;vertical-align:middle;";
-        anchor.insertAdjacentElement("afterend", b);
+          "justify-content:center;width:32px;height:32px;margin:0 2px;" +
+          "border-radius:8px;cursor:pointer;vertical-align:middle;";
+        anchor.parentNode.insertBefore(b, anchor);
       } catch (err) {}
     };
 
@@ -627,7 +622,7 @@ st.html(
     addBiliIcon();
     if (!W.__loadBadgeShown) {
       W.__loadBadgeShown = true;
-      setStatus("守護 v14 已啟動（縮放保存就緒）", true);
+      setStatus("守護 v15 已啟動（縮放保存就緒）", true);
     } else if (W.__lastStatus) {
       // rerun 若清掉徽章，由新實例補回上一個狀態（雲端除錯用）
       setStatus(W.__lastStatus.msg, W.__lastStatus.ok);
