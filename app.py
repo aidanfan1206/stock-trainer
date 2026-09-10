@@ -132,7 +132,7 @@ st.html(
       return (best || parent).document;
     };
     let D = findAppDoc();
-    P.console.log("[kline-guard] v17 installed");
+    P.console.log("[kline-guard] v18 installed");
     W.__guardInstance = (W.__guardInstance || 0) + 1;
     const myId = W.__guardInstance;
 
@@ -197,6 +197,8 @@ st.html(
       if (nd && nd !== D) { D = nd; }  // 應用 frame 若重載：換新文件
       // B 站圖標注入（登入版雲端外框才有的 GitHub 連結旁）
       if (!W.__biliDone) addBiliIcon();
+      // 角落 <(ºOº)> 藥丸
+      if (!W.__faceDone) addBiliFace();
       const saved = W.__savedDragmode;
       const el = D.querySelector(".js-plotly-plot");
       if (!el || !el._fullLayout) return;
@@ -624,13 +626,36 @@ st.html(
         anchor.parentNode.insertBefore(b, anchor.parentNode.firstChild);
       } catch (err) {}
     };
+    // 角落的 <(ºOº)> 藥丸：固定於右下角，點擊開 B 站影片
+    const addBiliFace = () => {
+      try {
+        if (D.getElementById("kline-face")) { W.__faceDone = true; return; }
+        const a = D.createElement("a");
+        a.id = "kline-face";
+        a.href = "https://www.bilibili.com/video/BV1Ys426dE8b/" +
+                 "?share_source=copy_web&vd_source=dcdc280f4cf73da3d3cb626a056c4209";
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        a.title = "B站影片";
+        a.textContent = "<(ºOº)>";
+        a.style.cssText = "position:fixed;right:16px;bottom:16px;" +
+          "z-index:999998;display:inline-flex;align-items:center;" +
+          "font:bold 16px/1 sans-serif;color:#ffffff;" +
+          "background:#fb7299;padding:8px 12px;border-radius:16px;" +
+          "cursor:pointer;text-decoration:none;" +
+          "box-shadow:0 2px 8px rgba(0,0,0,.25);";
+        (D.body || D.documentElement).appendChild(a);
+        W.__faceDone = true;
+      } catch (err) {}
+    };
 
     // 載入徽章：每次「整頁載入」顯示一次，證明新版已生效
     // （rerun 重建的新實例不重複顯示，避免蓋掉診斷訊息）
     addBiliIcon();
+    addBiliFace();
     if (!W.__loadBadgeShown) {
       W.__loadBadgeShown = true;
-      setStatus("守護 v17 已啟動（縮放保存就緒）", true);
+      setStatus("守護 v18 已啟動（縮放保存就緒）", true);
     } else if (W.__lastStatus) {
       // rerun 若清掉徽章，由新實例補回上一個狀態（雲端除錯用）
       setStatus(W.__lastStatus.msg, W.__lastStatus.ok);
