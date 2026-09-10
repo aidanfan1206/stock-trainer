@@ -132,7 +132,7 @@ st.html(
       return (best || parent).document;
     };
     let D = findAppDoc();
-    P.console.log("[kline-guard] v12 installed");
+    P.console.log("[kline-guard] v13 installed");
     W.__guardInstance = (W.__guardInstance || 0) + 1;
     const myId = W.__guardInstance;
 
@@ -579,19 +579,32 @@ st.html(
         b.target = "_blank";
         b.rel = "noopener noreferrer";
         b.title = "B站空間";
-        b.innerHTML =
-          '<svg viewBox="0 0 24 24" width="18" height="18" ' +
-          'xmlns="http://www.w3.org/2000/svg">' +
-          '<path fill="#fb7299" d="M8.3 2.6 11 6.4l1 1.5 1-1.5 2.7-3.8' +
-          'c.5-.7 1.4-.9 2.1-.4.7.5.9 1.4.4 2.1l-1.8 2.5h.1c2.7 0 4.9 ' +
-          '2.2 4.9 4.9v5.4c0 2.7-2.2 4.9-4.9 4.9H8.5c-2.7 0-4.9-2.2' +
-          '-4.9-4.9v-5.4c0-2.7 2.2-4.9 4.9-4.9h.1L6.8 4.3c-.5-.7' +
-          '-.3-1.6.4-2.1.7-.5 1.6-.4 2.1.4z"/>' +
-          '<circle fill="#fff" cx="9.8" cy="14.6" r="1.15"/>' +
-          '<circle fill="#fff" cx="15.2" cy="14.6" r="1.15"/>' +
-          '<path fill="#fff" d="M10.7 17.2h3.6c.8 0 1.3.9.8 1.5l-1.8 ' +
-          '2.7c-.4.6-1.3.6-1.7 0l-1.8-2.7c-.4-.6.1-1.5.9-1.5z"/>' +
-          "</svg>";
+        // SVG 以 DOM API 建構：st.html 內容若含 SVG 標記字串，
+        // 前端消毒/解析會出問題（整段腳本不執行——已實測定位）
+        const NS = "http://www.w3.org/2000/svg";
+        const svg = P.document.createElementNS(NS, "svg");
+        svg.setAttribute("viewBox", "0 0 24 24");
+        svg.setAttribute("width", "18");
+        svg.setAttribute("height", "18");
+        const mk = (tag, attrs) => {
+          const n = P.document.createElementNS(NS, tag);
+          for (const k in attrs) n.setAttribute(k, attrs[k]);
+          return n;
+        };
+        svg.appendChild(mk("path", { fill: "#fb7299",
+          d: "M8.3 2.6 11 6.4l1 1.5 1-1.5 2.7-3.8c.5-.7 1.4-.9 2.1-.4" +
+             ".7.5.9 1.4.4 2.1l-1.8 2.5h.1c2.7 0 4.9 2.2 4.9 4.9v5.4" +
+             "c0 2.7-2.2 4.9-4.9 4.9H8.5c-2.7 0-4.9-2.2-4.9-4.9v-5.4" +
+             "c0-2.7 2.2-4.9 4.9-4.9h.1L6.8 4.3c-.5-.7-.3-1.6.4-2.1" +
+             ".7-.5 1.6-.4 2.1.4z" }));
+        svg.appendChild(mk("circle", {
+          fill: "#fff", cx: "9.8", cy: "14.6", r: "1.15" }));
+        svg.appendChild(mk("circle", {
+          fill: "#fff", cx: "15.2", cy: "14.6", r: "1.15" }));
+        svg.appendChild(mk("path", { fill: "#fff",
+          d: "M10.7 17.2h3.6c.8 0 1.3.9.8 1.5l-1.8 2.7c-.4.6-1.3.6" +
+             "-1.7 0l-1.8-2.7c-.4-.6.1-1.5.9-1.5z" }));
+        b.appendChild(svg);
         b.style.cssText = "display:inline-flex;align-items:center;" +
           "margin:0 6px;vertical-align:middle;";
         gh.insertAdjacentElement("afterend", b);
@@ -603,7 +616,7 @@ st.html(
     addBiliIcon();
     if (!W.__loadBadgeShown) {
       W.__loadBadgeShown = true;
-      setStatus("守護 v12 已啟動（縮放保存就緒）", true);
+      setStatus("守護 v13 已啟動（縮放保存就緒）", true);
     } else if (W.__lastStatus) {
       // rerun 若清掉徽章，由新實例補回上一個狀態（雲端除錯用）
       setStatus(W.__lastStatus.msg, W.__lastStatus.ok);
