@@ -101,9 +101,21 @@ st.html(
     // 用函式作用域避免 const 宣告在 rerun 重跑時互相衝突
     (function () {
     const P = parent, W = P.window, D = P.document;
-    P.console.log("[kline-guard] v9 installed");
+    P.console.log("[kline-guard] v10 installed");
     W.__guardInstance = (W.__guardInstance || 0) + 1;
     const myId = W.__guardInstance;
+
+    // —— 多重事件註冊：document／window／app 容器三層都掛——
+    // 某些前端環境下事件可能在到達 document 前被攔截（雲端曾
+    // 出現「點主內容按鈕不觸發、點工具列卻觸發」），多層保險
+    const onMulti = (handler) => {
+      D.addEventListener("click", handler, true);
+      W.addEventListener("click", handler, true);
+      const appC = D.querySelector('[data-testid="stAppViewContainer"]');
+      if (appC) {
+        appC.addEventListener("click", handler, true);
+      }
+    };
 
     // —— 捲動位置守護 ——
     W.__savedScroll = W.__savedScroll || 0;
@@ -121,7 +133,7 @@ st.html(
     // 會把 modebar 工具重置回 zoom。capture 攔截 modebar 點擊記錄
     // 「使用者」的選擇（data-attr="dragmode" + data-val），定時比對
     // 圖表實際工具，被重置就點回對應按鈕（plotly 自己的 UI 路徑）
-    D.addEventListener("click", (e) => {
+    onMulti((e) => {
       if (W.__guardInstance !== myId) return;  // 舊實例：退位
       const t = e.target && e.target.closest
         ? e.target.closest(".modebar-btn") : null;
@@ -134,7 +146,7 @@ st.html(
                     "drawclosedpath", "drawcircle"].includes(val)) {
           W.__savedDragmode = val;
         }
-    }, true);
+    });
 
     // —— 定時比對＋回復（只有最新實例的輪詢會持續運作）——
     const iv = setInterval(() => {
@@ -333,6 +345,7 @@ st.html(
           "box-shadow:0 2px 8px rgba(0,0,0,.25);";
         (D.body || D.documentElement).appendChild(b);
       }
+      W.__lastStatus = { msg: msg, ok: ok };  // 供 rerun 後的新實例補回
       b.textContent = msg;
       b.style.background = ok ? "#d9f2e6" : "#f8d7da";
       b.style.color = ok ? "#0b5c37" : "#a13030";
@@ -367,7 +380,11 @@ st.html(
         }
         setStatus(why ? "縮放保存 ✗ " + why : "縮放保存 ✓ 已寫入", !why);
       } else if (!z) {
-        setStatus("縮放保存 ✗ 沒有可寫的縮放（先縮放再點按鈕）", false);
+        const el2 = D.querySelector(".js-plotly-plot");
+        const why2 = el2 ? (el2._fullLayout
+          ? "圖表存在但範圍讀取失敗" : "圖表無 _fullLayout")
+          : "找不到圖表元素";
+        setStatus("縮放保存 ✗ 沒有可寫的縮放：" + why2, false);
       } else {
         setStatus("縮放無變化（與上次保存相同，未重寫）", true);
       }
@@ -395,7 +412,7 @@ st.html(
     // 每個新實例都註冊自己的提交勾（舊實例退位）：不綁死第一個
     // iframe 環境，也不綁死特定 testid——不同 Streamlit 版本的
     // DOM 差異都能相容（Community Cloud 會自行升級 Streamlit）
-    D.addEventListener("click", (e) => {
+    const commitFromEvent = (e) => {
       if (W.__guardInstance !== myId) return;  // 舊實例：退位
       const t = e.target && e.target.closest ? e.target : null;
       if (!t || typeof t.closest !== "function") return;
@@ -412,7 +429,17 @@ st.html(
         t.closest('[data-baseweb="calendar"]');
       if (!commitable) return;
       commitAll();
-    }, true);
+    };
+    // pointerdown 與 click 都會觸發（600ms 去重）：即使其中一種
+    // 事件被攔截，另一種仍能送達提交
+    const commitDeduped = (e) => {
+      const now = Date.now();
+      if (W.__lastCommitAt && now - W.__lastCommitAt < 600) return;
+      W.__lastCommitAt = now;
+      commitFromEvent(e);
+    };
+    onMulti(commitDeduped);
+    W.addEventListener("pointerdown", commitDeduped, true);
 
     // —— 橡皮擦 ——
     // plotly 7 的 eraseshape 按鈕只刪「已啟用形狀」，而啟用機制
@@ -420,8 +447,11 @@ st.html(
     // 已查證）。自行實作擦拭模式：點橡皮擦切換（按鈕高亮），
     // 再點線條即刪除（現價線 name="__price__" 除外）；點其他
     // 模式列工具或圖表外區域退出擦拭。
-    D.addEventListener("click", (e) => {
+    onMulti((e) => {
       if (W.__guardInstance !== myId) return;  // 舊實例：退位
+      const ne = Date.now();
+      if (W.__lastEraseAt && ne - W.__lastEraseAt < 600) return;  // 多層註冊去重
+      W.__lastEraseAt = ne;
       const t = e.target && e.target.closest ? e.target : null;
       if (!t || typeof t.closest !== "function") return;
         const mb = t.closest(".modebar-btn");
@@ -460,7 +490,7 @@ st.html(
         } else {
           W.__erasing = false;  // 點圖表外：退出擦拭
         }
-    }, true);
+    });
 
     // —— rerun 重建後回復捲動位置 ——
     const appRoot = D.querySelector("[data-testid='stAppViewContainer']");
@@ -482,7 +512,10 @@ st.html(
     // （rerun 重建的新實例不重複顯示，避免蓋掉診斷訊息）
     if (!W.__loadBadgeShown) {
       W.__loadBadgeShown = true;
-      setStatus("守護 v9 已啟動（縮放保存就緒）", true);
+      setStatus("守護 v10 已啟動（縮放保存就緒）", true);
+    } else if (W.__lastStatus) {
+      // rerun 若清掉徽章，由新實例補回上一個狀態（雲端除錯用）
+      setStatus(W.__lastStatus.msg, W.__lastStatus.ok);
     }
     })();
     </script>
