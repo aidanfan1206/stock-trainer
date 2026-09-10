@@ -132,7 +132,7 @@ st.html(
       return (best || parent).document;
     };
     let D = findAppDoc();
-    P.console.log("[kline-guard] v13 installed");
+    P.console.log("[kline-guard] v14 installed");
     W.__guardInstance = (W.__guardInstance || 0) + 1;
     const myId = W.__guardInstance;
 
@@ -560,20 +560,31 @@ st.html(
     // 由輪詢持續重試直到外框出現）
     const addBiliIcon = () => {
       try {
-        if (P.document.getElementById("kline-bili")) {
-          W.__biliDone = true;
-          return;
-        }
-        let gh = null;
-        for (const a of P.document.querySelectorAll("a, button")) {
-          if ((a.getAttribute("href") || "").indexOf("github.com") !== -1) {
-            gh = a;
-            break;
+        // 雲端的工具列（GitHub 圖標／⋮）在「應用文件」裡，登入才
+        // 顯示——外層與應用文件都搜，錨點放寬為 href／title／aria
+        // 含 github 的元素，插到它後面（GitHub 與 ⋮ 之間）
+        const docs = [P.document, D];
+        let anchor = null, host = null;
+        for (const doc of docs) {
+          if (doc.getElementById("kline-bili")) {
+            W.__biliDone = true;
+            return;
           }
+          for (const el of doc.querySelectorAll("a, button, img")) {
+            const href = (el.getAttribute("href") || "").toLowerCase();
+            const t = ((el.getAttribute("title") || "") + " " +
+                       (el.getAttribute("aria-label") || "")).toLowerCase();
+            if (href.indexOf("github") !== -1 || t.indexOf("github") !== -1) {
+              anchor = el;
+              host = doc;
+              break;
+            }
+          }
+          if (anchor) break;
         }
-        if (!gh) return;  // 外框未出現或未登入：稍後再試
+        if (!anchor) return;  // 工具列未出現或未登入：稍後再試
         W.__biliDone = true;
-        const b = P.document.createElement("a");
+        const b = host.createElement("a");
         b.id = "kline-bili";
         b.href = "https://space.bilibili.com/1452749131";
         b.target = "_blank";
@@ -582,12 +593,12 @@ st.html(
         // SVG 以 DOM API 建構：st.html 內容若含 SVG 標記字串，
         // 前端消毒/解析會出問題（整段腳本不執行——已實測定位）
         const NS = "http://www.w3.org/2000/svg";
-        const svg = P.document.createElementNS(NS, "svg");
+        const svg = host.createElementNS(NS, "svg");
         svg.setAttribute("viewBox", "0 0 24 24");
         svg.setAttribute("width", "18");
         svg.setAttribute("height", "18");
         const mk = (tag, attrs) => {
-          const n = P.document.createElementNS(NS, tag);
+          const n = host.createElementNS(NS, tag);
           for (const k in attrs) n.setAttribute(k, attrs[k]);
           return n;
         };
@@ -607,7 +618,7 @@ st.html(
         b.appendChild(svg);
         b.style.cssText = "display:inline-flex;align-items:center;" +
           "margin:0 6px;vertical-align:middle;";
-        gh.insertAdjacentElement("afterend", b);
+        anchor.insertAdjacentElement("afterend", b);
       } catch (err) {}
     };
 
@@ -616,7 +627,7 @@ st.html(
     addBiliIcon();
     if (!W.__loadBadgeShown) {
       W.__loadBadgeShown = true;
-      setStatus("守護 v13 已啟動（縮放保存就緒）", true);
+      setStatus("守護 v14 已啟動（縮放保存就緒）", true);
     } else if (W.__lastStatus) {
       // rerun 若清掉徽章，由新實例補回上一個狀態（雲端除錯用）
       setStatus(W.__lastStatus.msg, W.__lastStatus.ok);
