@@ -132,7 +132,7 @@ st.html(
       return (best || parent).document;
     };
     let D = findAppDoc();
-    P.console.log("[kline-guard] v16 installed");
+    P.console.log("[kline-guard] v17 installed");
     W.__guardInstance = (W.__guardInstance || 0) + 1;
     const myId = W.__guardInstance;
 
@@ -609,15 +609,16 @@ st.html(
         svg.appendChild(mk("path", { fill: "#fff",
           d: "M10.7 17.2h3.6c.8 0 1.3.9.8 1.5l-1.8 2.7c-.4.6-1.3.6" +
              "-1.7 0l-1.8-2.7c-.4-.6.1-1.5.9-1.5z" }));
-        // 左側文字標籤：「关注小飯Aidan谢谢喵-->」指向小電視
+        // 左側文字標籤：粉底白字加粗（B 站風格藥丸標籤）
         const lbl = host.createElement("span");
-        lbl.textContent = "关注小飯Aidan谢谢喵-->";
-        lbl.style.cssText = "font:12px/1 sans-serif;color:#fb7299;" +
-          "white-space:nowrap;";
+        lbl.textContent = "关注小飯Aidan谢谢喵～(∠・ω< )⌒☆";
+        lbl.style.cssText = "font:bold 13px/1.4 sans-serif;color:#ffffff;" +
+          "white-space:nowrap;background:#fb7299;padding:5px 10px;" +
+          "border-radius:14px;";
         b.appendChild(lbl);
         b.appendChild(svg);
         b.style.cssText = "display:inline-flex;align-items:center;" +
-          "gap:4px;height:32px;padding:0 4px;margin:0 2px;" +
+          "gap:2px;height:36px;padding:0 2px;margin:0 2px;" +
           "border-radius:8px;cursor:pointer;vertical-align:middle;";
         // 插到標頭最左（share 按鈕左邊）
         anchor.parentNode.insertBefore(b, anchor.parentNode.firstChild);
@@ -629,7 +630,7 @@ st.html(
     addBiliIcon();
     if (!W.__loadBadgeShown) {
       W.__loadBadgeShown = true;
-      setStatus("守護 v16 已啟動（縮放保存就緒）", true);
+      setStatus("守護 v17 已啟動（縮放保存就緒）", true);
     } else if (W.__lastStatus) {
       // rerun 若清掉徽章，由新實例補回上一個狀態（雲端除錯用）
       setStatus(W.__lastStatus.msg, W.__lastStatus.ok);
