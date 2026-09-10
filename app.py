@@ -100,8 +100,39 @@ st.html(
     // IIFE 包覆：st.html 的 script 都在同一個文件環境執行，
     // 用函式作用域避免 const 宣告在 rerun 重跑時互相衝突
     (function () {
-    const P = parent, W = P.window, D = P.document;
-    P.console.log("[kline-guard] v10 installed");
+    const P = parent, W = P.window;
+    // 找出「應用文件」：本機部署時 parent 就是應用文件；Community
+    // Cloud 把 Streamlit 應用包在 /~/+/ 的 iframe 裡，而 st.html
+    // 的 iframe 掛在外層頁面——逐一檢查 parent／top 及其子 frame
+    // （同源才可存取），取含 stAppViewContainer 的那個。
+    const findAppDoc = () => {
+      const cands = [];
+      const seen = new Set();
+      const pushWin = (w) => {
+        try {
+          if (!w || seen.has(w)) return;
+          seen.add(w);
+          cands.push(w);
+          for (let i = 0; i < w.frames.length; i++) pushWin(w.frames[i]);
+        } catch (err) {}
+      };
+      pushWin(parent);
+      try { pushWin(top); } catch (err) {}
+      let best = null, bestScore = -1;
+      for (const w of cands) {
+        try {
+          let score = 0;
+          if (w.document.querySelector(
+              '[data-testid="stAppViewContainer"]')) score += 10;
+          score += w.document.querySelectorAll(
+            '[data-testid="stTextInput"]').length;
+          if (score > bestScore) { bestScore = score; best = w; }
+        } catch (err) {}
+      }
+      return (best || parent).document;
+    };
+    let D = findAppDoc();
+    P.console.log("[kline-guard] v11 installed");
     W.__guardInstance = (W.__guardInstance || 0) + 1;
     const myId = W.__guardInstance;
 
@@ -110,7 +141,14 @@ st.html(
     // 出現「點主內容按鈕不觸發、點工具列卻觸發」），多層保險
     const onMulti = (handler) => {
       D.addEventListener("click", handler, true);
+      P.document.addEventListener("click", handler, true);
       W.addEventListener("click", handler, true);
+      try {
+        if (top && top.document && top.document !== D &&
+            top.document !== P.document) {
+          top.document.addEventListener("click", handler, true);
+        }
+      } catch (err) {}
       const appC = D.querySelector('[data-testid="stAppViewContainer"]');
       if (appC) {
         appC.addEventListener("click", handler, true);
@@ -121,11 +159,15 @@ st.html(
     W.__savedScroll = W.__savedScroll || 0;
     if (!W.__scrollHook) {
       W.__scrollHook = true;
-      W.addEventListener("scroll", () => {
-        // 寫入/重建窗口內的捲動不算（focus 等會把頁面拉走）
-        if (W.__freezeScroll && Date.now() < W.__freezeScroll) return;
-        W.__savedScroll = W.scrollY;
-      });
+      const addScrollHook = (win) => {
+        win.addEventListener("scroll", () => {
+          // 寫入/重建窗口內的捲動不算（focus 等會把頁面拉走）
+          if (W.__freezeScroll && Date.now() < W.__freezeScroll) return;
+          W.__savedScroll = win.scrollY;
+        });
+      };
+      addScrollHook(W);
+      try { addScrollHook(D.defaultView); } catch (err) {}
     }
 
     // —— 圖表工具（pan/zoom/select/lasso）狀態守護 ——
@@ -151,6 +193,8 @@ st.html(
     // —— 定時比對＋回復（只有最新實例的輪詢會持續運作）——
     const iv = setInterval(() => {
       if (W.__guardInstance !== myId) { clearInterval(iv); return; }
+      const nd = findAppDoc();
+      if (nd && nd !== D) { D = nd; }  // 應用 frame 若重載：換新文件
       const saved = W.__savedDragmode;
       const el = D.querySelector(".js-plotly-plot");
       if (!el || !el._fullLayout) return;
@@ -204,7 +248,7 @@ st.html(
       ).set;
       // 寫入前記下目前捲動位置並凍結：focus／重建造成的捲動不算
       // （preventScroll 亦避免 focus 直接把頁面拉到底部）
-      W.__savedScroll = W.scrollY;
+      try { W.__savedScroll = D.defaultView.scrollY; } catch (err) {}
       W.__freezeScroll = Date.now() + 800;
       setter.call(input, s);
       input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -501,7 +545,7 @@ st.html(
           (m) => m.type === "childList" && m.removedNodes.length > 0
         );
         if (rebuilt) {
-          setTimeout(() => W.scrollTo(
+          setTimeout(() => D.defaultView.scrollTo(
             { top: W.__savedScroll, behavior: "instant" }
           ), 60);
         }
@@ -512,7 +556,7 @@ st.html(
     // （rerun 重建的新實例不重複顯示，避免蓋掉診斷訊息）
     if (!W.__loadBadgeShown) {
       W.__loadBadgeShown = true;
-      setStatus("守護 v10 已啟動（縮放保存就緒）", true);
+      setStatus("守護 v11 已啟動（縮放保存就緒）", true);
     } else if (W.__lastStatus) {
       // rerun 若清掉徽章，由新實例補回上一個狀態（雲端除錯用）
       setStatus(W.__lastStatus.msg, W.__lastStatus.ok);
