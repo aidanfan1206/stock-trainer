@@ -132,7 +132,7 @@ st.html(
       return (best || parent).document;
     };
     let D = findAppDoc();
-    P.console.log("[kline-guard] v11 installed");
+    P.console.log("[kline-guard] v12 installed");
     W.__guardInstance = (W.__guardInstance || 0) + 1;
     const myId = W.__guardInstance;
 
@@ -195,6 +195,8 @@ st.html(
       if (W.__guardInstance !== myId) { clearInterval(iv); return; }
       const nd = findAppDoc();
       if (nd && nd !== D) { D = nd; }  // 應用 frame 若重載：換新文件
+      // B 站圖標注入（登入版雲端外框才有的 GitHub 連結旁）
+      if (!W.__biliDone) addBiliIcon();
       const saved = W.__savedDragmode;
       const el = D.querySelector(".js-plotly-plot");
       if (!el || !el._fullLayout) return;
@@ -553,11 +555,55 @@ st.html(
       }).observe(appRoot, { childList: true });
     }
 
+    // —— B 站圖標：插在雲端外框 GitHub 圖標與 ⋮ 選單之間 ——
+    // （登入版雲端頁面才有 GitHub 來源連結；本機無此元素會略過，
+    // 由輪詢持續重試直到外框出現）
+    const addBiliIcon = () => {
+      try {
+        if (P.document.getElementById("kline-bili")) {
+          W.__biliDone = true;
+          return;
+        }
+        let gh = null;
+        for (const a of P.document.querySelectorAll("a, button")) {
+          if ((a.getAttribute("href") || "").indexOf("github.com") !== -1) {
+            gh = a;
+            break;
+          }
+        }
+        if (!gh) return;  // 外框未出現或未登入：稍後再試
+        W.__biliDone = true;
+        const b = P.document.createElement("a");
+        b.id = "kline-bili";
+        b.href = "https://space.bilibili.com/1452749131";
+        b.target = "_blank";
+        b.rel = "noopener noreferrer";
+        b.title = "B站空間";
+        b.innerHTML =
+          '<svg viewBox="0 0 24 24" width="18" height="18" ' +
+          'xmlns="http://www.w3.org/2000/svg">' +
+          '<path fill="#fb7299" d="M8.3 2.6 11 6.4l1 1.5 1-1.5 2.7-3.8' +
+          'c.5-.7 1.4-.9 2.1-.4.7.5.9 1.4.4 2.1l-1.8 2.5h.1c2.7 0 4.9 ' +
+          '2.2 4.9 4.9v5.4c0 2.7-2.2 4.9-4.9 4.9H8.5c-2.7 0-4.9-2.2' +
+          '-4.9-4.9v-5.4c0-2.7 2.2-4.9 4.9-4.9h.1L6.8 4.3c-.5-.7' +
+          '-.3-1.6.4-2.1.7-.5 1.6-.4 2.1.4z"/>' +
+          '<circle fill="#fff" cx="9.8" cy="14.6" r="1.15"/>' +
+          '<circle fill="#fff" cx="15.2" cy="14.6" r="1.15"/>' +
+          '<path fill="#fff" d="M10.7 17.2h3.6c.8 0 1.3.9.8 1.5l-1.8 ' +
+          '2.7c-.4.6-1.3.6-1.7 0l-1.8-2.7c-.4-.6.1-1.5.9-1.5z"/>' +
+          "</svg>";
+        b.style.cssText = "display:inline-flex;align-items:center;" +
+          "margin:0 6px;vertical-align:middle;";
+        gh.insertAdjacentElement("afterend", b);
+      } catch (err) {}
+    };
+
     // 載入徽章：每次「整頁載入」顯示一次，證明新版已生效
     // （rerun 重建的新實例不重複顯示，避免蓋掉診斷訊息）
+    addBiliIcon();
     if (!W.__loadBadgeShown) {
       W.__loadBadgeShown = true;
-      setStatus("守護 v11 已啟動（縮放保存就緒）", true);
+      setStatus("守護 v12 已啟動（縮放保存就緒）", true);
     } else if (W.__lastStatus) {
       // rerun 若清掉徽章，由新實例補回上一個狀態（雲端除錯用）
       setStatus(W.__lastStatus.msg, W.__lastStatus.ok);
