@@ -121,12 +121,11 @@ st.html(
     // 會把 modebar 工具重置回 zoom。capture 攔截 modebar 點擊記錄
     // 「使用者」的選擇（data-attr="dragmode" + data-val），定時比對
     // 圖表實際工具，被重置就點回對應按鈕（plotly 自己的 UI 路徑）
-    if (!D.__dragClickHook) {
-      D.__dragClickHook = true;
-      D.addEventListener("click", (e) => {
-        const t = e.target && e.target.closest
-          ? e.target.closest(".modebar-btn") : null;
-        if (!t) return;
+    D.addEventListener("click", (e) => {
+      if (W.__guardInstance !== myId) return;  // 舊實例：退位
+      const t = e.target && e.target.closest
+        ? e.target.closest(".modebar-btn") : null;
+      if (!t) return;
         const attr = t.getAttribute("data-attr");
         const val = t.getAttribute("data-val");
         if (attr === "dragmode" &&
@@ -135,8 +134,7 @@ st.html(
                     "drawclosedpath", "drawcircle"].includes(val)) {
           W.__savedDragmode = val;
         }
-      }, true);
-    }
+    }, true);
 
     // —— 定時比對＋回復（只有最新實例的輪詢會持續運作）——
     const iv = setInterval(() => {
@@ -370,6 +368,8 @@ st.html(
         setStatus(why ? "縮放保存 ✗ " + why : "縮放保存 ✓ 已寫入", !why);
       } else if (!z) {
         setStatus("縮放保存 ✗ 沒有可寫的縮放（先縮放再點按鈕）", false);
+      } else {
+        setStatus("縮放無變化（與上次保存相同，未重寫）", true);
       }
       // 畫線：隨本次互動同批提交（與推進/交易共用同一次 rerun）
       if (el && el._fullLayout &&
@@ -392,30 +392,27 @@ st.html(
     // 本身就會 rerun）時，才在 capture 階段讀取圖表「現行」範圍
     // 寫入——與該互動的訊息同批送出、共用同一次 rerun，純縮放
     // 期間完全零寫入、零 rerun、零閃爍。
-    if (!D.__zoomCommitHook) {
-      D.__zoomCommitHook = true;
-      D.addEventListener("click", (e) => {
-        const t = e.target && e.target.closest ? e.target : null;
-        if (!t || typeof t.closest !== "function") return;
-        // 圖表內互動（含 modebar 工具列）不觸發 rerun，不提交
-        if (t.closest(".js-plotly-plot")) return;
-        // 點進文字輸入框準備打字：不提交，避免 rerun 搶走焦點
-        if (t.closest('[data-testid="stTextInput"]')) return;
-        // 只認「確定會 rerun」的按鈕與選項小工具
-        const isWidgetButton = t.tagName === "BUTTON" && !!t.closest(
-          '[data-testid="stButton"], [data-testid="stNumberInput"], ' +
-          '[data-testid="stFormSubmitButton"], ' +
-          '[data-testid="stDownloadButton"], [data-testid="stLinkButton"]'
-        );
-        const isChoice = t.closest(
-          '[role="option"], [role="listbox"], [data-baseweb="menu"], ' +
-          '[data-baseweb="calendar"], [data-baseweb="popover"], ' +
-          '[role="checkbox"], [role="radio"], [role="switch"]'
-        );
-        if (!isWidgetButton && !isChoice) return;
-        commitAll();
-      }, true);
-    }
+    // 每個新實例都註冊自己的提交勾（舊實例退位）：不綁死第一個
+    // iframe 環境，也不綁死特定 testid——不同 Streamlit 版本的
+    // DOM 差異都能相容（Community Cloud 會自行升級 Streamlit）
+    D.addEventListener("click", (e) => {
+      if (W.__guardInstance !== myId) return;  // 舊實例：退位
+      const t = e.target && e.target.closest ? e.target : null;
+      if (!t || typeof t.closest !== "function") return;
+      // 圖表內互動（含 modebar 工具列）不觸發 rerun，不提交
+      if (t.closest(".js-plotly-plot")) return;
+      // 點進文字輸入框準備打字：不提交，避免 rerun 搶走焦點
+      if (t.closest('[data-testid="stTextInput"] input')) return;
+      // 任何按鈕／選項類互動都「可能」觸發 rerun：提交待寫縮放
+      const commitable = t.closest("button") ||
+        t.closest('[role="button"]') || t.closest('[role="option"]') ||
+        t.closest('[role="listbox"]') || t.closest('[role="checkbox"]') ||
+        t.closest('[role="radio"]') || t.closest('[role="switch"]') ||
+        t.closest('[data-baseweb="menu"]') ||
+        t.closest('[data-baseweb="calendar"]');
+      if (!commitable) return;
+      commitAll();
+    }, true);
 
     // —— 橡皮擦 ——
     // plotly 7 的 eraseshape 按鈕只刪「已啟用形狀」，而啟用機制
@@ -423,11 +420,10 @@ st.html(
     // 已查證）。自行實作擦拭模式：點橡皮擦切換（按鈕高亮），
     // 再點線條即刪除（現價線 name="__price__" 除外）；點其他
     // 模式列工具或圖表外區域退出擦拭。
-    if (!D.__eraseHook) {
-      D.__eraseHook = true;
-      D.addEventListener("click", (e) => {
-        const t = e.target && e.target.closest ? e.target : null;
-        if (!t || typeof t.closest !== "function") return;
+    D.addEventListener("click", (e) => {
+      if (W.__guardInstance !== myId) return;  // 舊實例：退位
+      const t = e.target && e.target.closest ? e.target : null;
+      if (!t || typeof t.closest !== "function") return;
         const mb = t.closest(".modebar-btn");
         if (mb) {
           const title = mb.getAttribute("data-title") ||
@@ -464,8 +460,7 @@ st.html(
         } else {
           W.__erasing = false;  // 點圖表外：退出擦拭
         }
-      }, true);
-    }
+    }, true);
 
     // —— rerun 重建後回復捲動位置 ——
     const appRoot = D.querySelector("[data-testid='stAppViewContainer']");
