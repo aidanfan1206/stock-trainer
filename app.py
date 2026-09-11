@@ -98,6 +98,9 @@ st.markdown(
 # Ctrl+Z（或滑鼠停在圖表上按 Ctrl+C）把上一狀態寫回
 # shapes_state、rerun 套用；換標的/日期區間時歷史自動清空；
 # Ctrl+C 在輸入框內仍是複製（有文字選取時也保留複製行為）。
+# v21：均線開關持久化——圖例點擊切換均線後，提交時（點按鈕等
+# 互動前一刻）現讀各均線 trace 的可見狀態寫入 ma_state（與畫線
+# 同批提交機制），rerun 後關閉的均線維持關閉（legendonly）。
 st.html(
     """
     <script>
@@ -136,7 +139,7 @@ st.html(
       return (best || parent).document;
     };
     let D = findAppDoc();
-    P.console.log("[kline-guard] v20 installed");
+    P.console.log("[kline-guard] v21 installed");
     W.__guardInstance = (W.__guardInstance || 0) + 1;
     const myId = W.__guardInstance;
 
@@ -596,6 +599,27 @@ st.html(
       const dateTxt = new Date(c0.x).toISOString().slice(0, 10);
       renderHoverTip(dateTxt, lines, pctLine, trades);
     };
+
+    // —— 均線開關持久化（圖例點擊）——
+    // plotly 圖例點擊切換 trace 可見性只存在於當下 DOM；rerun 重建
+    // 圖表後會全部重開。不需監聽點擊事件：提交時（點按鈕等互動
+    // 前一刻）直接現讀各均線 trace 的可見狀態寫入 ma_state——
+    // 與畫線同機制，切換當下零寫入、零 rerun、零閃爍。
+    const readMaState = () => {
+      const elMa = D.querySelector(".js-plotly-plot");
+      if (!elMa || !elMa._fullData) return null;
+      const specMa = getSpec();
+      const hiddenMa = [];
+      for (const t of elMa._fullData) {
+        if (t.name && /^MA\d+$/.test(t.name) &&
+            t.visible === "legendonly") {
+          hiddenMa.push(t.name);
+        }
+      }
+      return JSON.stringify({
+        k: specMa ? specMa.dataKey : null, hidden: hiddenMa,
+      });
+    };
     const writeShapesAndZoom = (s) => {
       ensureHistoryBase();
       if (s === W.__lastShapesWritten) return;
@@ -687,7 +711,7 @@ st.html(
         if (!why) {
           const n = D.querySelectorAll(
             '[data-testid="stTextInput"] input').length;
-          if (n < 3) why = "隱形輸入框不足：" + n + "/3";
+          if (n < 4) why = "隱形輸入框不足：" + n + "/4";
         }
         setStatus(why ? "縮放保存 ✗ " + why : "縮放保存 ✓ 已寫入", !why);
       } else if (!z) {
@@ -712,6 +736,12 @@ st.html(
           W.__lastShapesWritten = s;
           writeWidget("shapes_state", s);
         }
+      }
+      // 均線開關：隨本次互動同批提交（現讀現寫，與畫線同機制）
+      const sMa = readMaState();
+      if (sMa && sMa !== W.__lastMaWritten) {
+        W.__lastMaWritten = sMa;
+        writeWidget("ma_state", sMa);
       }
     };
 
@@ -919,7 +949,7 @@ st.html(
     addBiliFace();
     if (!W.__loadBadgeShown) {
       W.__loadBadgeShown = true;
-      setStatus("守護 v20 已啟動（縮放保存＋撤回＋懸停著色就緒）", true);
+      setStatus("守護 v21 已啟動（縮放＋撤回＋懸停＋均線開關就緒）", true);
     } else if (W.__lastStatus) {
       // rerun 若清掉徽章，由新實例補回上一個狀態（雲端除錯用）
       setStatus(W.__lastStatus.msg, W.__lastStatus.ok);
@@ -1263,6 +1293,18 @@ if _shapes_raw:
 for _shp in user_shapes:
     _shp.setdefault("editable", True)
 
+# 均線開關（圖例點擊切換）：使用者關掉的均線維持關閉——
+# legendonly 讓圖例保留灰色項目、可再點開；資料識別碼不符時全開
+hidden_mas = []
+_ma_raw = st.session_state.get("ma_state", "")
+if _ma_raw:
+    try:
+        _ma = json.loads(_ma_raw)
+        if _ma.get("k") == data_key and isinstance(_ma.get("hidden"), list):
+            hidden_mas = _ma["hidden"]
+    except (ValueError, TypeError):
+        pass
+
 # 圖表配色固定為淺色白底（與應用主題無關，統一白色）
 surface, paper, ink, ink2, grid = (
     "#ffffff", "#ffffff", "#0b0b0b", "#52514e", "#e1e0d9")
@@ -1294,6 +1336,8 @@ for w, color in MAS:
         mode="lines", name=f"MA{w}",
         line=dict(color=color, width=2),
         hoverinfo="skip",  # 懸停提示不顯示均線數值
+        # 均線開關：使用者關掉的均線維持關閉（legendonly 保留圖例）
+        visible="legendonly" if f"MA{w}" in hidden_mas else True,
     ))
 
 # 買賣點標註：買=綠色▲在 K 線下方、賣=紅色▼在上方。
@@ -1500,10 +1544,11 @@ col_btn4.button("重設 🔄", on_click=reset_sim)
 if (clicked_next or clicked_week or clicked_month) and is_last:
     st.warning("已到資料最後一天！")
 
-# 縮放保存與畫線的通訊管道：zoom_state／shapes_state 輸入框以
-# CSS 完全隱藏（testid 定位），不佔任何可見空間。前端守護把
-# 縮放範圍（互動前一刻）與畫線形狀（畫完 300ms 或隨互動）寫
-# 進來，Python 端讀取後直接套用到圖表規格。
+# 縮放保存與畫線與均線開關的通訊管道：zoom_state／shapes_state
+# ／ma_state 輸入框以 CSS 完全隱藏（testid 定位），不佔任何可見
+# 空間。前端守護把縮放範圍（互動前一刻）、畫線形狀（畫完
+# 300ms 或隨互動）與均線開關（圖例點擊後隨互動）寫進來，
+# Python 端讀取後直接套用到圖表規格。
 st.markdown(
     """
     <style>
@@ -1516,6 +1561,9 @@ st.markdown(
     div:has(> [data-testid="stMarkdownContainer"] .zoom-anchor) + div + div {
         display: none !important;
     }
+    div:has(> [data-testid="stMarkdownContainer"] .zoom-anchor) + div + div + div {
+        display: none !important;
+    }
     </style>
     <div class="zoom-anchor"></div>
     """,
@@ -1524,4 +1572,6 @@ st.markdown(
 st.text_input("zoom_state", key="zoom_state",
               label_visibility="collapsed", autocomplete="off")
 st.text_input("shapes_state", key="shapes_state",
+              label_visibility="collapsed", autocomplete="off")
+st.text_input("ma_state", key="ma_state",
               label_visibility="collapsed", autocomplete="off")
