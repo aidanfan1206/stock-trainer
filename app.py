@@ -1162,6 +1162,12 @@ fig.add_trace(go.Candlestick(
     open=visible["Open"], high=visible["High"],
     low=visible["Low"], close=visible["Close"],
     name="K線", showlegend=False,  # 蠟燭自明；圖例只留均線與買賣點
+    # 懸停只顯示當天 OHLC；<extra></extra> 去掉追蹤名（「K線:」前綴）
+    hovertemplate=(
+        f"Open %{{open:.{cur_dec}f}}<br>High %{{high:.{cur_dec}f}}<br>"
+        f"Low %{{low:.{cur_dec}f}}<br>Close %{{close:.{cur_dec}f}}"
+        "<extra></extra>"
+    ),
     increasing=dict(line=dict(color=up_color, width=1),
                     fillcolor=surface),
     decreasing=dict(line=dict(color=down_color, width=1),
@@ -1172,6 +1178,7 @@ for w, color in MAS:
         x=visible.index, y=mas[w].iloc[: abs_idx + 1],
         mode="lines", name=f"MA{w}",
         line=dict(color=color, width=2),
+        hoverinfo="skip",  # 懸停提示不顯示均線數值
     ))
 
 # 買賣點標註：買=綠色▲在 K 線下方、賣=紅色▼在上方。
