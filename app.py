@@ -1445,6 +1445,10 @@ st.caption("💡 畫線畫錯？按 **Ctrl+Z** 撤回上一條線")
 if is_last:
     closed = st.session_state.wins + st.session_state.losses
     win_rate = st.session_state.wins / closed * 100 if closed else 0.0
+    # 全倉持有策略：起點（模擬第一天收盤）全倉買入、不做任何操作，
+    # 持有到結束的收益率——作為與自己操作比較的基準
+    hold_start = float(data.iloc[sim_start]["Close"])
+    hold_ret = (close - hold_start) / hold_start * 100
     st.success(
         f"🎉 模擬結束（{current_date:%Y-%m-%d}）\n\n"
         f"- 最終總資產：**{money(total_assets)}**"
@@ -1454,7 +1458,8 @@ if is_last:
         f"- 已實現損益：{money_delta(st.session_state.realized_pnl)}\n"
         f"- 勝率：**{win_rate:.1f}%**"
         f"（{st.session_state.wins} 勝 / {st.session_state.losses} 負 / "
-        f"已平倉 {closed} 筆）"
+        f"已平倉 {closed} 筆）\n"
+        f"- 💤 全倉持有策略（起點全倉買入持有到結束）：**{hold_ret:+.2f}%**"
     )
 
 # ---------- 按鈕控制 ----------
