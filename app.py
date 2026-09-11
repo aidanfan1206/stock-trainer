@@ -94,6 +94,10 @@ st.markdown(
 # 300ms 寫入 shapes_state 持久化（跨 rerun／重新整理保留），
 # 點擊按鈕時亦隨該互動同批提交；形狀由圖表規格回寫並設
 # editable=True（可繼續拖曳頂點微調）。縮放機制同 v7。
+# v19：畫線撤回——每次形狀寫入前把上一狀態推入 W.__undoStack，
+# Ctrl+Z（或滑鼠停在圖表上按 Ctrl+C）把上一狀態寫回
+# shapes_state、rerun 套用；換標的/日期區間時歷史自動清空；
+# Ctrl+C 在輸入框內仍是複製（有文字選取時也保留複製行為）。
 st.html(
     """
     <script>
@@ -132,7 +136,7 @@ st.html(
       return (best || parent).document;
     };
     let D = findAppDoc();
-    P.console.log("[kline-guard] v18 installed");
+    P.console.log("[kline-guard] v19 installed");
     W.__guardInstance = (W.__guardInstance || 0) + 1;
     const myId = W.__guardInstance;
 
@@ -199,6 +203,18 @@ st.html(
       if (!W.__biliDone) addBiliIcon();
       // 角落 <(ºOº)> 藥丸
       if (!W.__faceDone) addBiliFace();
+      // 撤回快捷鍵綁定＋滑鼠座標追蹤＋跨資料碼歷史重設
+      bindUndoKeys();
+      trackMouse();
+      const specNow = getSpec();
+      const dkNow = specNow ? specNow.dataKey : null;
+      if (dkNow !== W.__undoDataKey) {
+        W.__undoDataKey = dkNow;
+        W.__undoStack = [];  // 換標的/日期區間：歷史隨新圖重來
+        if (dkNow !== null) {
+          W.__lastShapesWritten = JSON.stringify({ k: dkNow, shapes: [] });
+        }
+      }
       const saved = W.__savedDragmode;
       const el = D.querySelector(".js-plotly-plot");
       if (!el || !el._fullLayout) return;
@@ -342,16 +358,143 @@ st.html(
       }
       return z;
     };
-    const writeShapesAndZoom = (s) => {
-      if (s !== W.__lastShapesWritten) {
-        W.__lastShapesWritten = s;
-        writeWidget("shapes_state", s);
-        // 同批寫入現行縮放：rerun 後視圖不會跳回上次保存的範圍
+    // —— 畫線撤回（Ctrl+Z／Ctrl+C）——
+    // 每次形狀寫入（畫線/擦拭/拖曳頂點）前，把寫入前的狀態推入
+    // W.__undoStack；Ctrl+Z（或滑鼠停在圖表上時的 Ctrl+C）把上
+    // 一筆狀態寫回 shapes_state → rerun 套用——與自然畫線走同一
+    // 條持久化路徑，視圖也同批寫回、不會跳動。
+    // Ctrl+C 平常是複製：只在滑鼠在圖表上、且沒有文字選取時才
+    // 當撤回；輸入框內兩鍵都交還給輸入框自己的行為。
+    const ensureHistoryBase = () => {
+      if (W.__lastShapesWritten !== undefined &&
+          W.__lastShapesWritten !== null) return;
+      const spec = getSpec();
+      W.__lastShapesWritten = JSON.stringify({
+        k: spec ? spec.dataKey : null, shapes: [],
+      });
+    };
+    const eqVal = (a, b) => {
+      if (typeof a === "number" && typeof b === "number") {
+        return Math.abs(a - b) < 1e-4 * Math.max(1, Math.abs(b));
+      }
+      return a === b;
+    };
+    const shapesEquivalent = (a, b) => {
+      if (!Array.isArray(a) || !Array.isArray(b)) return false;
+      if (a.length !== b.length) return false;
+      for (let i = 0; i < a.length; i++) {
+        const p = a[i], q = b[i];
+        if (!p || !q || p.type !== q.type) return false;
+        for (const k of ["x0", "x1", "y0", "y1", "path"]) {
+          if (!eqVal(p[k], q[k])) return false;
+        }
+      }
+      return true;
+    };
+    const pushUndoState = (newS) => {
+      if (W.__lastShapesWritten === undefined ||
+          W.__lastShapesWritten === null) return;
+      try {
+        // 同一條線畫完後 plotly 可能再發一次「座標正規化」寫入
+        // （形狀內容幾乎相同）：不算新動作、不記歷史，避免
+        // 第一次 Ctrl+Z 變成無感空撤回
+        const prev = JSON.parse(W.__lastShapesWritten);
+        const next = JSON.parse(newS);
+        if (prev && next && shapesEquivalent(prev.shapes || [],
+                                             next.shapes || [])) return;
+      } catch (err) {}
+      const st = W.__undoStack || (W.__undoStack = []);
+      if (st.length && st[st.length - 1] === W.__lastShapesWritten) return;
+      st.push(W.__lastShapesWritten);
+      if (st.length > 50) st.shift();
+    };
+    const anyTextSelected = () => {
+      try {
+        if (D.getSelection && D.getSelection().toString()) return true;
+        if (P.document.getSelection &&
+            P.document.getSelection().toString()) return true;
+      } catch (err) {}
+      return false;
+    };
+    const pointerOnChart = () => {
+      if (W.__pointerOnChart) return true;
+      // rerun 換掉圖表元素後 mouseenter 不會重新觸發（滑鼠一直
+      // 在圖內）：用最近滑鼠座標 elementFromPoint 現查兜底
+      try {
+        const mx = W.__mouseX, my = W.__mouseY;
+        if (mx === undefined || my === undefined) return false;
+        const under = D.elementFromPoint(mx, my) ||
+          P.document.elementFromPoint(mx, my);
+        return !!(under && under.closest &&
+          under.closest(".js-plotly-plot"));
+      } catch (err) { return false; }
+    };
+    const trackMouse = () => {
+      W.__mouseTrackedWins = W.__mouseTrackedWins || new Set();
+      for (const win of [D.defaultView, W]) {
+        if (!win || W.__mouseTrackedWins.has(win)) continue;
+        W.__mouseTrackedWins.add(win);
+        win.addEventListener("mousemove", (e) => {
+          W.__mouseX = e.clientX;
+          W.__mouseY = e.clientY;
+        }, true);
+      }
+    };
+    const doUndo = () => {
+      ensureHistoryBase();
+      const st = W.__undoStack || [];
+      if (!st.length) {
+        setStatus("撤回 ✗ 沒有可撤回的線", false);
+        return;
+      }
+      const prev = st.pop();
+      if (prev !== W.__lastShapesWritten) {
+        W.__lastShapesWritten = prev;
+        writeWidget("shapes_state", prev);
+        // 同批寫入現行縮放：rerun 後視圖不跳動（與畫線提交同機制）
         const z = currentZoom();
         if (z && z !== W.__lastZoomWritten) {
           W.__lastZoomWritten = z;
           writeWidget("zoom_state", z);
         }
+      }
+      setStatus("撤回 ✓ 已恢復上一條線（還可撤回 " + st.length + " 次）",
+                true);
+    };
+    const undoKeyHandler = (e) => {
+      if (W.__guardInstance !== myId) return;  // 舊實例：退位
+      if (e.repeat || e.altKey || e.metaKey || !e.ctrlKey) return;
+      const k = e.key && e.key.toLowerCase();
+      if (k !== "z" && k !== "c") return;
+      const t = e.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" ||
+                t.isContentEditable)) return;  // 輸入框內：交還原生行為
+      if (k === "c" && (!pointerOnChart() || anyTextSelected())) {
+        return;  // Ctrl+C 平常是複製：滑鼠在圖表上＋無選取才算撤回
+      }
+      e.preventDefault();
+      doUndo();
+    };
+    const myBoundWins = [];
+    const bindUndoKeys = () => {
+      // 本機 D.defaultView === W（同一視窗）；雲端分屬兩視窗都要綁
+      for (const win of [D.defaultView, W]) {
+        if (!win || myBoundWins.indexOf(win) !== -1) continue;
+        myBoundWins.push(win);
+        win.addEventListener("keydown", undoKeyHandler, true);
+      }
+    };
+    const writeShapesAndZoom = (s) => {
+      ensureHistoryBase();
+      if (s === W.__lastShapesWritten) return;
+      pushUndoState(s);  // 記下寫入前狀態：Ctrl+Z／Ctrl+C 可撤回
+      W.__lastShapesWritten = s;
+      writeWidget("shapes_state", s);
+      // 同批寫入現行縮放：rerun 後視圖不會跳回上次保存的範圍
+      const z = currentZoom();
+      if (z && z !== W.__lastZoomWritten) {
+        W.__lastZoomWritten = z;
+        writeWidget("zoom_state", z);
       }
     };
     let _shapesTimer = null;
@@ -379,6 +522,11 @@ st.html(
       W.__boundPlot = el;
       el.on("plotly_relayouting", onRelayout);
       el.on("plotly_relayout", onRelayout);
+      // 滑鼠是否在圖表上（Ctrl+C 撤回的守衛條件）
+      el.addEventListener("mouseenter",
+        () => { W.__pointerOnChart = true; });
+      el.addEventListener("mouseleave",
+        () => { W.__pointerOnChart = false; });
     };
     // 自我診斷徽章：寫入結果直接顯示（雲端除錯用），2 秒後消失；
     // 位置往下錯開（top:64px），不擋右上角圖標；放在 app 容器外，
@@ -444,7 +592,9 @@ st.html(
           k: spec ? spec.dataKey : null,
           shapes: sanitizeShapes(el._fullLayout.shapes),
         });
+        ensureHistoryBase();
         if (s !== W.__lastShapesWritten) {
+          pushUndoState(s);  // 記下寫入前狀態：Ctrl+Z／Ctrl+C 可撤回
           W.__lastShapesWritten = s;
           writeWidget("shapes_state", s);
         }
@@ -655,7 +805,7 @@ st.html(
     addBiliFace();
     if (!W.__loadBadgeShown) {
       W.__loadBadgeShown = true;
-      setStatus("守護 v18 已啟動（縮放保存就緒）", true);
+      setStatus("守護 v19 已啟動（縮放保存＋畫線撤回就緒）", true);
     } else if (W.__lastStatus) {
       // rerun 若清掉徽章，由新實例補回上一個狀態（雲端除錯用）
       setStatus(W.__lastStatus.msg, W.__lastStatus.ok);
@@ -1152,6 +1302,12 @@ st.plotly_chart(fig, key="kline_chart", on_select="ignore",
                             ["toImage"],
                         ]},
                 height=620)
+
+# 畫線撤回快捷鍵提示（守護 v19：Ctrl+Z；滑鼠在圖表上 Ctrl+C 亦可）
+st.caption(
+    "💡 畫線畫錯？按 **Ctrl+Z** 撤回上一條線；滑鼠停在圖表上時 "
+    "按 **Ctrl+C** 也可撤回（輸入框裡的 Ctrl+C 仍是複製）"
+)
 
 # ---------- 結束自動結算 ----------
 if is_last:
