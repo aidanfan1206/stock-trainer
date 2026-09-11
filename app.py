@@ -910,12 +910,17 @@ def build_rangebreaks(data: pd.DataFrame):
             dict(values=[d.strftime("%Y-%m-%d") for d in holidays])]
 
 
+# 圖表額外顯示開始日期前 5 年的歷史 K 線（長線趨勢脈絡）；
+# 模擬進度與交易仍從開始日期起算
+HISTORY_YEARS = 5
+load_start = (pd.Timestamp(start_date) - pd.DateOffset(years=HISTORY_YEARS)).date()
+
 with st.spinner(f"下載 {resolved} 歷史數據中…"):
-    data = load_data(resolved, start_date.isoformat(),
+    data = load_data(resolved, load_start.isoformat(),
                      (end_date + timedelta(days=1)).isoformat())
 
 if data.empty:
-    st.error(f"找不到 {resolved} 在 {start_date} ~ {end_date} 之間的資料，"
+    st.error(f"找不到 {resolved} 在 {load_start} ~ {end_date} 之間的資料，"
              f"請檢查代號或日期。")
     st.stop()
 
@@ -934,15 +939,20 @@ if st.session_state.get("data_key") != data_key:
     st.session_state.realized_pnl = 0.0
     st.session_state.pop("prev_total", None)
     st.session_state.pop("prev_ret", None)
-st.session_state.total = len(data)  # 供按鈕 callback 使用
+# 模擬起點＝開始日期在資料中的位置（開始日期落在休市日時取後一個交易日）
+sim_start = min(int(data.index.searchsorted(pd.Timestamp(start_date))),
+                len(data) - 1)
+n_sim_days = len(data) - sim_start
+st.session_state.total = n_sim_days  # 供按鈕 callback 使用
 
-idx = min(st.session_state.get("idx", 0), len(data) - 1)  # 防呆：不超出範圍
-is_last = idx == len(data) - 1
+idx = min(st.session_state.get("idx", 0), n_sim_days - 1)  # 防呆：不超出範圍
+is_last = idx == n_sim_days - 1
+abs_idx = sim_start + idx  # 資料列位置（含 5 年歷史的偏移）
 
 # 當天資料與貨幣（顯示與交易 callback 共用；callback 在 rerun 前執行，
 # 讀到的是前一次執行寫入、也就是目前這一天的值）
-current_date = data.index[idx]
-current = data.iloc[idx]
+current_date = data.index[abs_idx]
+current = data.iloc[abs_idx]
 close = float(current["Close"])
 st.session_state.current_date = current_date
 st.session_state.current_close = close
@@ -965,7 +975,8 @@ def money_delta(v: float) -> str:
 
 
 # ---------- 顯示當天資訊 ----------
-prev_close = data.iloc[idx - 1]["Close"] if idx > 0 else None
+# 前一天收盤：模擬第一天也用開始日期前一天的收盤（5 年歷史內）
+prev_close = data.iloc[abs_idx - 1]["Close"] if abs_idx > 0 else None
 
 col1, col2, col3 = st.columns(3)
 col1.metric("📅 目前日期", current_date.strftime("%Y-%m-%d"))
@@ -976,7 +987,7 @@ col2.metric(
     delta=(money_delta(close_chg) if abs(close_chg) > 1e-9 else None),
     delta_color=delta_color_mode,  # 正負色跟隨漲跌配色；0 時不顯示徽章
 )
-col3.metric("📊 進度", f"{idx + 1} / {len(data)} 天")
+col3.metric("📊 進度", f"{idx + 1} / {n_sim_days} 天")
 
 # ---------- 資產看板 ----------
 cash = st.session_state.cash
@@ -1098,7 +1109,7 @@ MAS = [
     (250, "#eda100"),  # 琥珀
 ]
 mas = {w: data["Close"].rolling(w).mean() for w, _ in MAS}
-visible = data.iloc[: idx + 1]  # 只顯示到當前模擬日期
+visible = data.iloc[: abs_idx + 1]  # 顯示到當前模擬日期（含開始前的 5 年歷史）
 
 # X 與 Y 預設固定為完整資料區間：點擊推進時既有 K 線的位置與
 # 大小完全不變，新蠟燭在屬於它的位置上原地出現（右側未到之處留白）。
@@ -1158,7 +1169,7 @@ fig.add_trace(go.Candlestick(
 ))
 for w, color in MAS:
     fig.add_trace(go.Scatter(
-        x=visible.index, y=mas[w].iloc[: idx + 1],
+        x=visible.index, y=mas[w].iloc[: abs_idx + 1],
         mode="lines", name=f"MA{w}",
         line=dict(color=color, width=2),
     ))
@@ -1193,7 +1204,7 @@ if sells:
 # 線尾直接標註（標籤用中性墨色，不用系列色）。
 # 目前 K 線固定在右緣，標籤一律放在線尾左側，避免被右緣裁切。
 for w, _ in MAS:
-    s = mas[w].iloc[: idx + 1]
+    s = mas[w].iloc[: abs_idx + 1]
     if s.notna().any():
         x_end = s.last_valid_index()
         fig.add_annotation(
@@ -1303,11 +1314,8 @@ st.plotly_chart(fig, key="kline_chart", on_select="ignore",
                         ]},
                 height=620)
 
-# 畫線撤回快捷鍵提示（守護 v19：Ctrl+Z；滑鼠在圖表上 Ctrl+C 亦可）
-st.caption(
-    "💡 畫線畫錯？按 **Ctrl+Z** 撤回上一條線；滑鼠停在圖表上時 "
-    "按 **Ctrl+C** 也可撤回（輸入框裡的 Ctrl+C 仍是複製）"
-)
+# 畫線撤回快捷鍵提示（守護 v19）
+st.caption("💡 畫線畫錯？按 **Ctrl+Z** 撤回上一條線")
 
 # ---------- 結束自動結算 ----------
 if is_last:
