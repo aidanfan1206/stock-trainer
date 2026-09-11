@@ -136,7 +136,7 @@ st.html(
       return (best || parent).document;
     };
     let D = findAppDoc();
-    P.console.log("[kline-guard] v19 installed");
+    P.console.log("[kline-guard] v20 installed");
     W.__guardInstance = (W.__guardInstance || 0) + 1;
     const myId = W.__guardInstance;
 
@@ -206,6 +206,11 @@ st.html(
       // 撤回快捷鍵綁定＋滑鼠座標追蹤＋跨資料碼歷史重設
       bindUndoKeys();
       trackMouse();
+      // 隱藏 plotly 內建懸停標籤盒（自繪提示框取而代之）
+      injectHoverCss();
+      if (W.__lastHoverAt && Date.now() - W.__lastHoverAt > 1200) {
+        hideHoverTip();  // rerun 後懸停事件斷線：清掉殘留提示框
+      }
       const specNow = getSpec();
       const dkNow = specNow ? specNow.dataKey : null;
       if (dkNow !== W.__undoDataKey) {
@@ -484,6 +489,113 @@ st.html(
         win.addEventListener("keydown", undoKeyHandler, true);
       }
     };
+
+    // —— 自繪懸停提示框 ——
+    // plotly 7 的統一懸停列文字色忽略各 trace 的 hoverlabel
+    // （實測），「漲跌幅」無法隨當天 K 線著色——改為隱藏
+    // plotly 的標籤盒（保留十字線），監聽 plotly_hover 事件
+    // 自行繪製提示框：日期＋OHLC＋著色漲跌幅＋買賣點。
+    const injectHoverCss = () => {
+      if (W.__hoverCssDoc === D) return;
+      const stl = D.createElement("style");
+      stl.textContent =
+        ".js-plotly-plot .hoverlayer .legend { display: none !important; }";
+      (D.head || D.documentElement).appendChild(stl);
+      W.__hoverCssDoc = D;
+    };
+    const hideHoverTip = () => {
+      const tip = D.getElementById("kline-hover-tip");
+      if (tip) tip.style.display = "none";
+    };
+    // 提示框內容一律以 DOM API 建構：st.html 腳本內若含 HTML
+    // 標籤字串會整段靜默失效（已實測定位，與 SVG 同因）
+    const renderHoverTip = (title, lines, pctLine, trades) => {
+      let tip = D.getElementById("kline-hover-tip");
+      if (!tip) {
+        tip = D.createElement("div");
+        tip.id = "kline-hover-tip";
+        tip.style.cssText = "position:fixed;z-index:999997;display:none;" +
+          "pointer-events:none;background:#ffffff;border:1px solid " +
+          "rgba(49,51,63,.2);border-radius:4px;padding:8px 10px;" +
+          "font:12px/1.5 sans-serif;color:#808495;white-space:nowrap;" +
+          "box-shadow:0 2px 8px rgba(0,0,0,.15);";
+        (D.body || D.documentElement).appendChild(tip);
+      }
+      while (tip.firstChild) tip.removeChild(tip.firstChild);
+      const addLine = (txt, color, bold, mono) => {
+        const dv = D.createElement("div");
+        dv.textContent = txt;
+        if (color) dv.style.color = color;
+        if (bold) dv.style.fontWeight = "bold";
+        if (mono) dv.style.fontFamily = "Consolas,Menlo,monospace";
+        tip.appendChild(dv);
+      };
+      const titleEl = D.createElement("div");
+      titleEl.textContent = title;
+      titleEl.style.cssText = "color:#808495;font-size:11px;";
+      tip.appendChild(titleEl);
+      for (const ln of lines) addLine(ln, "#0b0b0b", false, true);
+      if (pctLine) addLine(pctLine.txt, pctLine.color, true, false);
+      for (const t of trades) addLine(t.txt, t.color, false, false);
+      tip.style.display = "block";
+      // 位置：滑鼠右下方；近右緣翻左、近下緣翻上
+      const mx = W.__mouseX, my = W.__mouseY;
+      if (mx === undefined || my === undefined) return;
+      const vw = D.defaultView.innerWidth, vh = D.defaultView.innerHeight;
+      let x = mx + 16, y = my + 16;
+      if (x + tip.offsetWidth > vw - 8) x = mx - tip.offsetWidth - 16;
+      if (y + tip.offsetHeight > vh - 8) y = my - tip.offsetHeight - 16;
+      if (x < 8) x = 8;
+      if (y < 8) y = 8;
+      tip.style.left = x + "px";
+      tip.style.top = y + "px";
+    };
+    const onHoverEvent = (e) => {
+      if (W.__guardInstance !== myId) return;  // 舊實例：退位
+      W.__lastHoverAt = Date.now();
+      const pts = (e && e.points) || [];
+      const c0 = pts.find((p) => p.data && p.data.type === "candlestick");
+      if (!c0) { hideHoverTip(); return; }
+      const i = c0.pointIndex;
+      if (i === undefined || i === null) { hideHoverTip(); return; }
+      const spec = getSpec() || {};
+      const upC = spec.upColor || "#e34948";
+      const dnC = spec.downColor || "#008300";
+      const dec = spec.decimals || 2;
+      // plotly 7 的懸停點直接帶當天 OHLC（point.data 非完整陣列）
+      const open = +c0.open, high = +c0.high, low = +c0.low,
+            close = +c0.close;
+      const fmt = (v) => Number(v).toFixed(dec);
+      const lines = ["Open " + fmt(open), "High " + fmt(high),
+                     "Low " + fmt(low), "Close " + fmt(close)];
+      // 漲跌幅＝與前一天收盤比（前一天從圖表完整資料取）；
+      // 顏色跟隨當天 K 線（收≥開＝漲色）
+      let pctLine = null;
+      // 前一天收盤從懸停點自帶的完整資料取（plotly 7 存成
+      // Float64Array，Array.isArray 會誤判：只驗長度）
+      const fd = c0.fullData;
+      if (i > 0 && fd && fd.close && fd.close.length > i && fd.close[i - 1]) {
+        const pct = ((close - fd.close[i - 1]) / fd.close[i - 1]) * 100;
+        pctLine = {
+          txt: "漲跌幅 " + (pct >= 0 ? "+" : "") + pct.toFixed(2) + "%",
+          color: close >= open ? upC : dnC,
+        };
+      }
+      // 買賣點（同一 x 上的標記 trace）
+      const trades = [];
+      for (const p of pts) {
+        if (p.data && (p.data.name === "買入" || p.data.name === "賣出") &&
+            Array.isArray(p.customdata) && p.customdata.length >= 2) {
+          trades.push({
+            txt: p.data.name + " " + p.customdata[0] + " 股 @ " +
+              fmt(p.customdata[1]),
+            color: p.data.name === "買入" ? "#0ca30c" : "#d03b3b",
+          });
+        }
+      }
+      const dateTxt = new Date(c0.x).toISOString().slice(0, 10);
+      renderHoverTip(dateTxt, lines, pctLine, trades);
+    };
     const writeShapesAndZoom = (s) => {
       ensureHistoryBase();
       if (s === W.__lastShapesWritten) return;
@@ -522,6 +634,8 @@ st.html(
       W.__boundPlot = el;
       el.on("plotly_relayouting", onRelayout);
       el.on("plotly_relayout", onRelayout);
+      el.on("plotly_hover", onHoverEvent);  // 自繪懸停提示框
+      el.on("plotly_unhover", hideHoverTip);
       // 滑鼠是否在圖表上（Ctrl+C 撤回的守衛條件）
       el.addEventListener("mouseenter",
         () => { W.__pointerOnChart = true; });
@@ -805,7 +919,7 @@ st.html(
     addBiliFace();
     if (!W.__loadBadgeShown) {
       W.__loadBadgeShown = true;
-      setStatus("守護 v19 已啟動（縮放保存＋畫線撤回就緒）", true);
+      setStatus("守護 v20 已啟動（縮放保存＋撤回＋懸停著色就緒）", true);
     } else if (W.__lastStatus) {
       // rerun 若清掉徽章，由新實例補回上一個狀態（雲端除錯用）
       setStatus(W.__lastStatus.msg, W.__lastStatus.ok);
@@ -1162,7 +1276,8 @@ fig.add_trace(go.Candlestick(
     open=visible["Open"], high=visible["High"],
     low=visible["Low"], close=visible["Close"],
     name="K線", showlegend=False,  # 蠟燭自明；圖例只留均線與買賣點
-    # 懸停只顯示當天 OHLC；<extra></extra> 去掉追蹤名（「K線:」前綴）
+    # 懸停提示由守護 v20 自繪（可著色漲跌幅行）；此處的模板僅作
+    # plotly 內建標籤的後備；<extra></extra> 去掉追蹤名（「K線:」前綴）
     hovertemplate=(
         f"Open %{{open:.{cur_dec}f}}<br>High %{{high:.{cur_dec}f}}<br>"
         f"Low %{{low:.{cur_dec}f}}<br>Close %{{close:.{cur_dec}f}}"
@@ -1296,7 +1411,9 @@ fig.layout.shapes = [price_shape] + user_shapes
 # 固定 key＋固定高度：組件身份穩定、高度不因 rerun 閃動；
 # on_select="ignore" 讓框選等選擇狀態不觸發 rerun、也不被重置
 # 把資料識別碼交給前端守護（供縮放視圖的 key 校驗）
-_spec_json = json.dumps({"dataKey": data_key})
+# 資料識別碼＋配色與小數位交給前端守護（自繪懸停提示框著色用）
+_spec_json = json.dumps({"dataKey": data_key, "upColor": up_color,
+                         "downColor": down_color, "decimals": cur_dec})
 st.html(
     f"""<script>
     (function () {{
