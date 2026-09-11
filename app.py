@@ -1052,23 +1052,34 @@ for w, _ in MAS:
             font=dict(color=ink2, size=10),
         )
 
-# 當前股價線：顏色跟隨當日漲跌（與 K 線同色系）；
+# 當前股價線：顏色跟隨當日漲跌（與 K 線同色系）；虛線加粗更明顯
 # 價籤以 yshift 與虛線錯開（接近頂部時改放線下方）
 price_color = (up_color if prev_close is None or close >= prev_close
                else down_color)
 y_span = visible["High"].max() - visible["Low"].min()
-tag_shift = -14 if close > visible["Low"].min() + 0.85 * y_span else 10
+tag_shift = -16 if close > visible["Low"].min() + 0.85 * y_span else 12
+# 與前一天對比的漲跌幅（第一天無前一天資料則不顯示）
+price_pct = None
+if prev_close is not None:
+    price_pct = (close - prev_close) / prev_close * 100
+price_label = f"現價 {money(close)}"
+if price_pct is not None:
+    price_label += f"（{price_pct:+.2f}%）"
 # 現價線以「有名稱的形狀」加入（name="__price__"）：前端以此辨識
 # ——不納入畫線持久化、擦拭時也不可刪除
 price_shape = dict(type="line", xref="paper", x0=0, x1=1,
                    yref="y", y0=close, y1=close,
-                   line=dict(color=price_color, width=1, dash="dot"),
+                   line=dict(color=price_color, width=2, dash="dot"),
                    name="__price__")
+# 價籤改成白字＋漲跌色底（藥丸樣式），明顯易讀
 fig.add_annotation(
     xref="paper", yref="y", x=0, xanchor="left", y=close,
     yshift=tag_shift,
-    text=f"現價 {money(close)}", showarrow=False,
-    font=dict(color=price_color, size=11),
+    text=price_label, showarrow=False,
+    font=dict(color="#ffffff", size=12),
+    bgcolor=price_color,
+    bordercolor=price_color,
+    borderpad=5,
 )
 
 fig.update_layout(
