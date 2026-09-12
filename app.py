@@ -15,6 +15,7 @@ from datetime import date, timedelta
 
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 import yfinance as yf
 
@@ -139,7 +140,7 @@ st.html(
       return (best || parent).document;
     };
     let D = findAppDoc();
-    P.console.log("[kline-guard] v21 installed");
+    P.console.log("[kline-guard] v22 installed");
     W.__guardInstance = (W.__guardInstance || 0) + 1;
     const myId = W.__guardInstance;
 
@@ -300,6 +301,15 @@ st.html(
         }
       }
     };
+    // plotly 7 在雙子圖（成交量）下 relayout 事件的日期軸值變成
+    // 日曆字串（實測）：一律正規化為 UTC 毫秒數字，Python 端以
+    // unit="ms" 解析、圖表還原時與當下所見完全一致（補 Z 避免
+    // 本地時區把時間平移掉）
+    const toMs = (v) => {
+      if (typeof v === "number") return v;
+      const s = String(v).replace(" ", "T");
+      return new Date(s.indexOf("Z") !== -1 ? s : s + "Z").getTime();
+    };
     const onRange = (e) => {
       if (!e) return;
       const has = (k) => e[k] !== undefined && e[k] !== null;
@@ -316,10 +326,10 @@ st.html(
       const spec = getSpec();
       W.__pendingZoom = JSON.stringify({
         k: spec ? spec.dataKey : null,
-        x0: has("xaxis.range[0]") ? e["xaxis.range[0]"]
-          : (xr ? xr[0] : xa.range[0]),
-        x1: has("xaxis.range[1]") ? e["xaxis.range[1]"]
-          : (xr ? xr[1] : xa.range[1]),
+        x0: toMs(has("xaxis.range[0]") ? e["xaxis.range[0]"]
+          : (xr ? xr[0] : xa.range[0])),
+        x1: toMs(has("xaxis.range[1]") ? e["xaxis.range[1]"]
+          : (xr ? xr[1] : xa.range[1])),
         y0: has("yaxis.range[0]") ? e["yaxis.range[0]"]
           : (yr ? yr[0] : ya.range[0]),
         y1: has("yaxis.range[1]") ? e["yaxis.range[1]"]
@@ -358,7 +368,7 @@ st.html(
             const spec = getSpec();
             z = JSON.stringify({
               k: spec ? spec.dataKey : null,
-              x0: xa.range[0], x1: xa.range[1],
+              x0: toMs(xa.range[0]), x1: toMs(xa.range[1]),
               y0: ya.range[0], y1: ya.range[1],
             });
           }
@@ -442,9 +452,17 @@ st.html(
       for (const win of [D.defaultView, W]) {
         if (!win || W.__mouseTrackedWins.has(win)) continue;
         W.__mouseTrackedWins.add(win);
+        // 監聽器跨實例共用（Set 去重）：兜底函式由
+        // W.__fallbackFn 指向「最新實例」的版本
         win.addEventListener("mousemove", (e) => {
           W.__mouseX = e.clientX;
           W.__mouseY = e.clientY;
+          if (e.buttons) return;  // 拖曳/畫線中：不兜底
+          if (W.__fallbackTimer) return;
+          W.__fallbackTimer = setTimeout(() => {
+            W.__fallbackTimer = null;
+            if (W.__fallbackFn) W.__fallbackFn();
+          }, 120);
         }, true);
       }
     };
@@ -458,13 +476,36 @@ st.html(
       const prev = st.pop();
       if (prev !== W.__lastShapesWritten) {
         W.__lastShapesWritten = prev;
-        writeWidget("shapes_state", prev);
-        // 同批寫入現行縮放：rerun 後視圖不跳動（與畫線提交同機制）
-        const z = currentZoom();
-        if (z && z !== W.__lastZoomWritten) {
-          W.__lastZoomWritten = z;
-          writeWidget("zoom_state", z);
-        }
+        const commitUndo = () => {
+          writeWidget("shapes_state", prev);
+          // 同批寫入現行縮放：rerun 後視圖不跳動（與畫線提交同機制）
+          const z = currentZoom();
+          if (z && z !== W.__lastZoomWritten) {
+            W.__lastZoomWritten = z;
+            writeWidget("zoom_state", z);
+          }
+        };
+        commitUndo();
+        // rerun 進行中寫入可能被組件重建吞掉（畫線後立刻 Ctrl+Z
+        // 偶爾失效）：900ms 後驗證輸入值，沒寫進就重試（最多 3 次）
+        let _undoTries = 0;
+        const _verifyUndo = setInterval(() => {
+          if (W.__guardInstance !== myId) {
+            clearInterval(_verifyUndo); return;
+          }
+          _undoTries++;
+          let ok = false;
+          for (const w of D.querySelectorAll(
+              '[data-testid="stTextInput"]')) {
+            if (w.textContent.indexOf("shapes_state") !== -1) {
+              const inp = w.querySelector("input");
+              ok = !!(inp && inp.value === prev);
+              break;
+            }
+          }
+          if (ok || _undoTries >= 3) clearInterval(_verifyUndo);
+          else commitUndo();
+        }, 900);
       }
       setStatus("撤回 ✓ 已恢復上一條線（還可撤回 " + st.length + " 次）",
                 true);
@@ -553,31 +594,20 @@ st.html(
       tip.style.left = x + "px";
       tip.style.top = y + "px";
     };
-    const onHoverEvent = (e) => {
-      if (W.__guardInstance !== myId) return;  // 舊實例：退位
-      W.__lastHoverAt = Date.now();
-      const pts = (e && e.points) || [];
-      const c0 = pts.find((p) => p.data && p.data.type === "candlestick");
-      if (!c0) { hideHoverTip(); return; }
-      const i = c0.pointIndex;
-      if (i === undefined || i === null) { hideHoverTip(); return; }
+    // 以「蠟燭列索引」繪製提示框（plotly 事件與兜底兩路共用）
+    const renderTipFromTraceData = (i, fd) => {
       const spec = getSpec() || {};
       const upC = spec.upColor || "#e34948";
       const dnC = spec.downColor || "#008300";
       const dec = spec.decimals || 2;
-      // plotly 7 的懸停點直接帶當天 OHLC（point.data 非完整陣列）
-      const open = +c0.open, high = +c0.high, low = +c0.low,
-            close = +c0.close;
+      const open = +fd.open[i], high = +fd.high[i], low = +fd.low[i],
+            close = +fd.close[i];
       const fmt = (v) => Number(v).toFixed(dec);
       const lines = ["Open " + fmt(open), "High " + fmt(high),
                      "Low " + fmt(low), "Close " + fmt(close)];
-      // 漲跌幅＝與前一天收盤比（前一天從圖表完整資料取）；
-      // 顏色跟隨當天 K 線（收≥開＝漲色）
+      // 漲跌幅＝與前一天收盤比；顏色跟隨當天 K 線（收≥開＝漲色）
       let pctLine = null;
-      // 前一天收盤從懸停點自帶的完整資料取（plotly 7 存成
-      // Float64Array，Array.isArray 會誤判：只驗長度）
-      const fd = c0.fullData;
-      if (i > 0 && fd && fd.close && fd.close.length > i && fd.close[i - 1]) {
+      if (i > 0 && fd.close && fd.close.length > i && fd.close[i - 1]) {
         const pct = ((close - fd.close[i - 1]) / fd.close[i - 1]) * 100;
         pctLine = {
           txt: "漲跌幅 " + (pct >= 0 ? "+" : "") + pct.toFixed(2) + "%",
@@ -586,19 +616,76 @@ st.html(
       }
       // 買賣點（同一 x 上的標記 trace）
       const trades = [];
-      for (const p of pts) {
-        if (p.data && (p.data.name === "買入" || p.data.name === "賣出") &&
-            Array.isArray(p.customdata) && p.customdata.length >= 2) {
-          trades.push({
-            txt: p.data.name + " " + p.customdata[0] + " 股 @ " +
-              fmt(p.customdata[1]),
-            color: p.data.name === "買入" ? "#0ca30c" : "#d03b3b",
-          });
+      const elT = D.querySelector(".js-plotly-plot");
+      const dMs = toMs(fd.x[i]);
+      if (elT && elT._fullData) {
+        for (const t of elT._fullData) {
+          if (t.name !== "買入" && t.name !== "賣出") continue;
+          for (let j = 0; j < t.x.length; j++) {
+            if (Math.abs(toMs(t.x[j]) - dMs) < 1 &&
+                Array.isArray(t.customdata) && t.customdata[j] &&
+                t.customdata[j].length >= 2) {
+              trades.push({
+                txt: t.name + " " + t.customdata[j][0] + " 股 @ " +
+                  fmt(t.customdata[j][1]),
+                color: t.name === "買入" ? "#0ca30c" : "#d03b3b",
+              });
+              break;
+            }
+          }
         }
       }
-      const dateTxt = new Date(c0.x).toISOString().slice(0, 10);
-      renderHoverTip(dateTxt, lines, pctLine, trades);
+      renderHoverTip(String(fd.x[i]).slice(0, 10), lines, pctLine, trades);
     };
+    const onHoverEvent = (e) => {
+      if (W.__guardInstance !== myId) return;  // 舊實例：退位
+      W.__lastHoverAt = Date.now();
+      const pts = (e && e.points) || [];
+      const c0 = pts.find((p) => p.data && p.data.type === "candlestick");
+      if (!c0 || c0.pointIndex === undefined ||
+          c0.pointIndex === null) { hideHoverTip(); return; }
+      renderTipFromTraceData(c0.pointIndex, c0.fullData);
+    };
+    // 懸停兜底：plotly 在子圖空白處／休市缺口可能不觸發
+    // plotly_hover（雙子圖下更明顯，實測）。滑鼠在圖表上時以
+    // 像素→資料座標自算最近蠟燭、直接自繪提示框；plotly 有
+    // 觸發時（近 300ms 內）不重複處理——十字線照常由 plotly 提供
+    const fallbackHover = () => {
+      if (W.__guardInstance !== myId) return;  // 舊實例：退位
+      if (W.__lastHoverAt && Date.now() - W.__lastHoverAt < 300) return;
+      const mx = W.__mouseX, my = W.__mouseY;
+      if (mx === undefined || my === undefined) { hideHoverTip(); return; }
+      const el = D.querySelector(".js-plotly-plot");
+      if (!el || !el._fullLayout || !el._fullData ||
+          !el._fullData[0]) { hideHoverTip(); return; }
+      const r = el.getBoundingClientRect();
+      const sz = el._fullLayout._size;
+      const inside = (mx >= r.left + sz.l && mx <= r.left + sz.l + sz.w &&
+                      my >= r.top + sz.t && my <= r.top + sz.t + sz.h - sz.b);
+      if (!inside) { hideHoverTip(); return; }
+      const fd = el._fullData[0];
+      if (!fd.x || !fd.x.length) { hideHoverTip(); return; }
+      // x 陣列（日曆字串）快取為毫秒：二分找最近蠟燭
+      if (W.__xsMsEl !== el) {
+        W.__xsMsEl = el;
+        W.__xsMs = [];
+        for (let k = 0; k < fd.x.length; k++) W.__xsMs.push(toMs(fd.x[k]));
+      }
+      const xa = el._fullLayout.xaxis;
+      const dMs = toMs(xa.p2d(mx - r.left - sz.l));
+      const xsMs = W.__xsMs;
+      let lo = 0, hi = xsMs.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (xsMs[mid] <= dMs) lo = mid; else hi = mid - 1;
+      }
+      let i = lo;
+      if (i + 1 < xsMs.length &&
+          Math.abs(xsMs[i + 1] - dMs) < Math.abs(xsMs[i] - dMs)) i++;
+      renderTipFromTraceData(i, fd);
+      W.__lastHoverAt = Date.now();  // 與 plotly 事件共用防重複
+    };
+    W.__fallbackFn = fallbackHover;  // 供跨實例共用的 mousemove 監聽器呼叫
 
     // —— 均線開關持久化（圖例點擊）——
     // plotly 圖例點擊切換 trace 可見性只存在於當下 DOM；rerun 重建
@@ -949,7 +1036,7 @@ st.html(
     addBiliFace();
     if (!W.__loadBadgeShown) {
       W.__loadBadgeShown = true;
-      setStatus("守護 v21 已啟動（縮放＋撤回＋懸停＋均線開關就緒）", true);
+      setStatus("守護 v22 已啟動（縮放＋撤回＋懸停＋均線開關就緒）", true);
     } else if (W.__lastStatus) {
       // rerun 若清掉徽章，由新實例補回上一個狀態（雲端除錯用）
       setStatus(W.__lastStatus.msg, W.__lastStatus.ok);
@@ -1270,8 +1357,12 @@ if _zoom:
     try:
         _z = json.loads(_zoom)
         if _z.get("k") == data_key:
-            x_range = [pd.to_datetime(_z["x0"], unit="ms"),
-                       pd.to_datetime(_z["x1"], unit="ms")]
+            # 前端正規化為毫秒數字；防呆：字串（舊格式）也照常解析
+            def _parse_ts(v):
+                if isinstance(v, (int, float)):
+                    return pd.to_datetime(v, unit="ms")
+                return pd.to_datetime(v)
+            x_range = [_parse_ts(_z["x0"]), _parse_ts(_z["x1"])]
             y_range = [float(_z["y0"]), float(_z["y1"])]
     except (ValueError, TypeError, KeyError):
         pass
@@ -1312,7 +1403,11 @@ surface, paper, ink, ink2, grid = (
 # 漲=空心（白底）、跌=實心——空心／實心的形狀差異同時是
 # 色弱讀者的第二個辨識通道，兩種配色模式皆保留。
 # 邊框 width=1：空心蠟燭的描邊維持細線
-fig = go.Figure()
+# 雙子圖：上方 K 線、下方每日成交量（共用 X 軸與縮放）
+fig = make_subplots(
+    rows=2, cols=1, shared_xaxes=True,
+    vertical_spacing=0.03, row_heights=[0.75, 0.25],
+)
 fig.add_trace(go.Candlestick(
     x=visible.index,
     open=visible["Open"], high=visible["High"],
@@ -1329,7 +1424,7 @@ fig.add_trace(go.Candlestick(
                     fillcolor=surface),
     decreasing=dict(line=dict(color=down_color, width=1),
                     fillcolor=down_color),
-))
+), row=1, col=1)
 for w, color in MAS:
     fig.add_trace(go.Scatter(
         x=visible.index, y=mas[w].iloc[: abs_idx + 1],
@@ -1338,7 +1433,7 @@ for w, color in MAS:
         hoverinfo="skip",  # 懸停提示不顯示均線數值
         # 均線開關：使用者關掉的均線維持關閉（legendonly 保留圖例）
         visible="legendonly" if f"MA{w}" in hidden_mas else True,
-    ))
+    ), row=1, col=1)
 
 # 買賣點標註：買=綠色▲在 K 線下方、賣=紅色▼在上方。
 # 顏色＋形狀＋位置三重編碼，避免與紅漲綠跌的蠟燭混淆。
@@ -1354,7 +1449,7 @@ if buys:
         customdata=[[t["shares"], t["price"]] for t in buys],
         hovertemplate=(f"買入 %{{customdata[0]}} 股 @ {cur_sym}"
                        f"%{{customdata[1]:.{cur_dec}f}}<extra></extra>"),
-    ))
+    ), row=1, col=1)
 if sells:
     fig.add_trace(go.Scatter(
         x=[t["date"] for t in sells],
@@ -1365,7 +1460,18 @@ if sells:
         customdata=[[t["shares"], t["price"]] for t in sells],
         hovertemplate=(f"賣出 %{{customdata[0]}} 股 @ {cur_sym}"
                        f"%{{customdata[1]:.{cur_dec}f}}<extra></extra>"),
-    ))
+    ), row=1, col=1)
+
+# 每日成交量：下方子圖、共用 X 軸；長條顏色跟隨當天 K 線漲跌色
+vol_colors = [up_color if c >= o else down_color
+              for c, o in zip(visible["Close"].values,
+                              visible["Open"].values)]
+fig.add_trace(go.Bar(
+    x=visible.index, y=visible["Volume"],
+    name="成交量", showlegend=False,
+    marker=dict(color=vol_colors, opacity=0.85),
+    hoverinfo="skip",  # 自繪懸停提示不顯示成交量列
+), row=2, col=1)
 
 # 線尾直接標註（標籤用中性墨色，不用系列色）。
 # 目前 K 線固定在右緣，標籤一律放在線尾左側，避免被右緣裁切。
@@ -1432,7 +1538,16 @@ fig.update_layout(
                rangebreaks=build_rangebreaks(data),  # 跳過休市日
                # X 固定為完整區間：推進時既有 K 線位置與圖表寬度不變
                range=x_range,
-               automargin=False),
+               automargin=False,
+               showticklabels=False),  # 日期標籤移到下方成交量子圖
+    xaxis2=dict(gridcolor=grid,
+                rangebreaks=build_rangebreaks(data),  # 與主圖同步跳過休市日
+                matches="x",  # 與主圖共用縮放範圍
+                # 與主軸相同的顯式範圍：若省略，xaxis2 會對成交量
+                # 資料自動定範圍、並透過 matches 反過來覆蓋主軸
+                # 的縮放（實測：縮放保存會失效）
+                range=x_range,
+                automargin=False),
     xaxis_rangeslider_visible=False,  # 隱藏範圍滑桿，避免偷看區間外
     hovermode="x unified",  # 統一的十字懸停提示
     plot_bgcolor=surface,
@@ -1440,10 +1555,14 @@ fig.update_layout(
     font=dict(color=ink, size=12),
     # Y 固定為完整區間＋關閉自動邊距：推進時蠟燭高度也不變
     yaxis=dict(gridcolor=grid, automargin=False, range=y_range),
+    # 成交量軸：右側、小字、SI 縮寫（60M）、從 0 起、無網格
+    yaxis2=dict(side="right", showgrid=False, automargin=False,
+                tickfont=dict(size=10, color=ink2),
+                tickformat="~s", rangemode="tozero"),
     legend=dict(orientation="h", yanchor="top", y=-0.06,
                 x=0.5, xanchor="center", font=dict(size=11),
                 itemsizing="constant"),
-    margin=dict(t=80, b=70, l=70, r=15),
+    margin=dict(t=80, b=70, l=70, r=45),
 )
 
 # 形狀以「完整替換」套用：update_layout 的陣列屬性是索引合併
